@@ -71,9 +71,9 @@ print('done')
 
 
 
-selector = 11
-x_original = original_data[selector][original_data[selector].cycle == 4].potential
-y_original = original_data[selector][original_data[selector].cycle == 4].current
+selector = original_data[11]['data']
+x_original = selector[selector.cycle == 4].potential
+y_original = selector[selector.cycle == 4].current
 
 x_interp = cycle.potential
 y_interp = cycle[300]
@@ -98,8 +98,8 @@ ax.plot(x, fc_data.rSq, color='green', linewidth=2.0, label=r'$R^2$')
 ax.legend()
 plt.show()
 
-
 x = np.sqrt(list(data.columns.values[2:])).reshape((-1, 1))
+
 
 def subplot(row_index):
     fig, ax = plt.subplots()

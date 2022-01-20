@@ -89,10 +89,33 @@ def extract_cycle_keys(file_data):
     return [max_keys, min_keys]
 
 
+def reset_cycles(measured_data: pd.DataFrame):
+    max_keys, min_keys = extract_cycle_keys(measured_data)
+
+    if max_keys[0] < min_keys[0]:
+        # First extreme is upper vertex
+        # --> Cycle is upper - lower - upper
+        measured_data.loc[0 : max_keys[0], 'cycle'] = 'start'
+        measured_data.loc[0 : max_keys[0], 'direction'] = 'up'
+        for max_key_index in range(len(max_keys)-1):
+            measured_data.loc[max_keys[max_key_index]: max_keys[max_key_index + 1], 'cycle'] = max_key_index+1
+            measured_data.loc[max_keys[max_key_index]: min_keys[max_key_index], 'direction'] = 'down'
+            measured_data.loc[min_keys[max_key_index]: max_keys[max_key_index + 1], 'direction'] = 'up'
+
+        measured_data.loc[max_keys[-1]:, 'cycle'] = 'end'
+        measured_data.loc[max_keys[-1]:min_keys[-1], 'direction'] = 'down'
+        measured_data.loc[min_keys[-1]:, 'direction'] = 'up'
+    else:
+        # First extreme is lower vertex
+        # --> Cycle is lower - upper - lower
+        raise Exception('direction yet unimplemented')
+
+    return measured_data
+
+
 def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution):
     # Prepare the cycles list for return
     cycles_df = []
-    cycles_original = []
 
     max_keys, min_keys = cycle_keys
 
@@ -112,12 +135,6 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
             up = file_data[min_keys[max_key_index]: max_keys[max_key_index + 1] + 1]
             up = up.drop_duplicates(subset='potential', keep='last')
 
-            original = {
-                'potential': np.concatenate([down.potential, up.potential]),
-                'current': np.concatenate([down.current, up.current]),
-                'cycle': max_key_index+1
-            }
-
             down = down.sort_values(by=['potential'])
             up = up.sort_values(by=['potential'])
             interp_current_down = lm.interpolate(down.potential, down.current, interp_potential_down, method='interp1d')
@@ -132,7 +149,6 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
 
             # Append to the cycles list
             cycles_df.append(pd.DataFrame(cycle))
-            cycles_original.append(pd.DataFrame(original))
     else:
         # First extreme is lower vertex
         # --> Cycle is lower - upper - lower
@@ -141,8 +157,7 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
     return {
         'path': measured_data['path'],
         'speed': measured_data['speed'],
-        'data': pd.concat(cycles_df),
-        'original': pd.concat(cycles_original)
+        'data': pd.concat(cycles_df)
     }
 
 
@@ -152,16 +167,21 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
     series_data = []
     original_data = []
 
+
     for path in path_list:
         # read the files data into an object
         measured_data = read_mpt(path)
         cycle_keys = extract_cycle_keys(measured_data['file_data'])
         measurement = interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution)
-
-        original_data.append(measurement['original'])
+        original = {
+            'path': measured_data['path'],
+            'speed': measured_data['speed'],
+            'data': reset_cycles(measured_data['file_data'])
+        }
 
         speed = measurement['speed']
         series_data.append(measurement)
+        original_data.append(original)
         bar.next()
 
     print("finished reading {file_count} files".format(file_count=len(path_list)))
@@ -170,15 +190,15 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
 
     print("sorted list by measurement speed")
 
-    speed_series = {
+    interp_series = {
         'cycle': series_data[0]['data'].cycle.values,
         'potential': series_data[0]['data'].potential.values,
     }
 
     for file_data in series_data:
         cycle = file_data['data']
-        speed_series[file_data['speed']] = cycle.current.values
+        interp_series[file_data['speed']] = cycle.current.values
 
     print("finished converting to pandas data frame")
 
-    return pd.DataFrame(speed_series), original_data
+    return pd.DataFrame(interp_series), original_data
