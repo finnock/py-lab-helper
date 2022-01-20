@@ -44,9 +44,9 @@ ttk.Label(tab2,
                                     padx=30,
                                     pady=30)
 
-colors = plt.cm.tab20(np.linspace(0,1,20))
 fig = Figure()
 ax = fig.add_subplot()
+colors = plt.cm.tab20(np.linspace(0,1,20))
 ax.set_prop_cycle(color=colors)
 
 df = mainData['file_data']

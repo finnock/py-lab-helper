@@ -1,12 +1,12 @@
-import os
+# debugging helpers
 import sys
 
 import numpy as np
 import pandas as pd
-
 import pylabhelper.math as lm
 import re
-from scipy import interpolate
+from sklearn.linear_model import LinearRegression
+from progress.bar import Bar
 
 
 def read_mpt(path):
@@ -113,7 +113,8 @@ def reset_cycles(measured_data: pd.DataFrame):
     return measured_data
 
 
-def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution):
+def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution,
+                       interpolation_method='interp1d'):
     # Prepare the cycles list for return
     cycles_df = []
 
@@ -137,8 +138,10 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
 
             down = down.sort_values(by=['potential'])
             up = up.sort_values(by=['potential'])
-            interp_current_down = lm.interpolate(down.potential, down.current, interp_potential_down, method='interp1d')
-            interp_current_up = lm.interpolate(up.potential, up.current, interp_potential_up, method='interp1d')
+            interp_current_down = lm.interpolate(down.potential, down.current, interp_potential_down,
+                                                 method=interpolation_method)
+            interp_current_up = lm.interpolate(up.potential, up.current, interp_potential_up,
+                                               method=interpolation_method)
 
             # Stitch Interpolated Data together
             cycle = {
@@ -161,7 +164,9 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
     }
 
 
-def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
+def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution):
+    # prepare the loading bar
+    bar = Bar('Processing', max=len(path_list))
 
     # prepare data object
     series_data = []
@@ -184,6 +189,8 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
         original_data.append(original)
         bar.next()
 
+    bar.finish()
+
     print("finished reading {file_count} files".format(file_count=len(path_list)))
 
     series_data.sort(key=lambda file_data: file_data['speed'])
@@ -202,3 +209,36 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
     print("finished converting to pandas data frame")
 
     return pd.DataFrame(interp_series), original_data
+
+
+def fc_analysis(data, cycle_number):
+    x = np.sqrt(list(data.columns.values[2:])).reshape((-1, 1))
+    cycle = data[data.cycle == cycle_number]
+
+    fc_data = {
+        'index': [],
+        'potential': [],
+        'faradayic': [],
+        'capacitive': [],
+        'rSq': []
+    }
+
+    speeds = data.columns.values[2:]
+    cutoff = 3
+
+    for index, row in cycle.iterrows():
+        y = []
+        for speed in speeds:
+            y.append(row[speed] / np.sqrt(speed))
+        model = LinearRegression().fit(x[:cutoff], y[:cutoff])
+        rSq = model.score(x[:cutoff], y[:cutoff])
+        faradayic = model.intercept_
+        capacitive = model.coef_[0]
+
+        fc_data['index'].append(index)
+        fc_data['potential'].append(row['potential'])
+        fc_data['faradayic'].append(faradayic)
+        fc_data['capacitive'].append(capacitive)
+        fc_data['rSq'].append(rSq)
+
+    return pd.DataFrame(fc_data)
