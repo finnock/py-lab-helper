@@ -63,8 +63,6 @@ fc_data = biologic.fc_analysis(interpolated_data, 4)
 print('fc analysis done')
 
 
-
-
 # ##################### Input Data Tab ########################
 #
 
@@ -73,48 +71,45 @@ input_data_tab.columnconfigure(1, weight=1)
 input_data_tab.rowconfigure(1, weight=1)
 input_data_tab.rowconfigure(3, weight=1)
 
-
-def update_speed(speed_value):
-    print(speed_value)
-    org_df = next(item for item in original_data if item['speed'] == float(speed_val.get()))['data']
-    org_pot = org_df.potential
-    org_tim = org_df.time
-    time_potential_axes[0].clear()
-    time_potential_axes[0].plot(org_tim, org_pot, color='grey', linewidth=2.0, label='Complete File')
-    time_potential_axes[0].legend()
-    time_potential_axes[1].clear()
-    for cycle in org_df.cycle.unique():
-        if cycle in ['start', 'end']:
-            time_potential_axes[1].plot(
-                org_df[org_df.cycle == cycle].time,
-                org_df[org_df.cycle == cycle].potential, linestyle='dashed', color='grey')
-        else:
-            time_potential_axes[1].plot(
-                org_df[(org_df.cycle == cycle) & (org_df.direction == 'down')].time,
-                org_df[(org_df.cycle == cycle) & (org_df.direction == 'down')].potential)
-            time_potential_axes[1].plot(
-                org_df[(org_df.cycle == cycle) & (org_df.direction == 'up')].time,
-                org_df[(org_df.cycle == cycle) & (org_df.direction == 'up')].potential)
-    time_potential_axes[1].legend()
-    time_potential_canvas.draw()
+cycle_val = tk.IntVar()
 
 speed_list = interpolated_data.columns[2:]
 speed_val = tk.StringVar()
 
-speed_opt = ttk.OptionMenu(input_data_tab, speed_val, speed_list[0], *speed_list, command=update_speed)
-speed_opt.grid(column=0, row=0, columnspan=2)
+org_df = {}
 
-# selector = original_data[11]['data']
-# x_original = selector[selector.cycle == 4].potential
-# y_original = selector[selector.cycle == 4].current
-#
-# x_interp = cycle.potential
-# y_interp = cycle[300]
+# org_df = next(item for item in original_data if item['speed'] == float(speed_val.get()))['data']
+# org_pot = org_df.potential
+# org_tim = org_df.time
+
+# ### INTERPOLATION PLOT ###
+interpolation_fig, interpolation_ax = plt.subplots()
+interpolation_ax.set_xlabel(r'potential in $V$')
+interpolation_ax.set_ylabel(r'current in $mA$')
+
+interpolation_canvas = FigureCanvasTkAgg(interpolation_fig, master=input_data_tab)
+interpolation_canvas.draw()
+interpolation_canvas.get_tk_widget().grid(column=1, row=1, sticky='NEWS')
+
+interpolation_toolbar = NavigationToolbar2Tk(interpolation_canvas, input_data_tab, pack_toolbar=False)
+interpolation_toolbar.update()
+interpolation_toolbar.grid(column=1, row=2)
+
+def interpolation_update_cycle(cycle_number):
+    org_df = next(item for item in original_data if item['speed'] == float(speed_val.get()))['data']
+    org_pot = org_df[org_df.cycle == int(cycle_number)].potential
+    org_cur = org_df[org_df.cycle == int(cycle_number)].current
+    interpolation_ax.clear()
+    interpolation_ax.plot(
+        interpolated_data[interpolated_data.cycle == int(cycle_number)].potential,
+        interpolated_data[interpolated_data.cycle == int(cycle_number)][float(speed_val.get())],
+        color='blue', linewidth=2.0, label='interpolated ___ mv/s'
+    )
+    interpolation_ax.plot(org_pot, org_cur, color='red', linewidth=1.0, label='original ___ mv/s')
+    interpolation_ax.legend()
+    interpolation_canvas.draw()
 
 # ### TIME POTENTIAL PLOT ###
-org_df = next(item for item in original_data if item['speed'] == float(speed_val.get()))['data']
-org_pot = org_df.potential
-org_tim = org_df.time
 
 time_potential_fig, time_potential_axes = plt.subplots(2, 1)
 colors_tab_20 = plt.cm.tab20(np.linspace(0,1,20))
@@ -134,33 +129,47 @@ time_potential_toolbar = NavigationToolbar2Tk(time_potential_canvas, input_data_
 time_potential_toolbar.update()
 time_potential_toolbar.grid(column=0, row=2)
 
+
+def update_speed(speed):
+    print(speed)
+    org_df = next(item for item in original_data if item['speed'] == float(speed))['data']
+    org_pot = org_df.potential
+    org_tim = org_df.time
+    time_potential_axes[0].clear()
+    time_potential_axes[0].plot(org_tim, org_pot, color='grey', linewidth=2.0, label='Complete File')
+    time_potential_axes[0].legend()
+    time_potential_axes[1].clear()
+    for cycle in org_df.cycle.unique():
+        if cycle in ['start', 'end']:
+            time_potential_axes[1].plot(
+                org_df[org_df.cycle == cycle].time,
+                org_df[org_df.cycle == cycle].potential, linestyle='dashed', color='grey'
+            )
+        else:
+            time_potential_axes[1].plot(
+                org_df[(org_df.cycle == cycle) & (org_df.direction == 'down')].time,
+                org_df[(org_df.cycle == cycle) & (org_df.direction == 'down')].potential
+            )
+            time_potential_axes[1].plot(
+                org_df[(org_df.cycle == cycle) & (org_df.direction == 'up')].time,
+                org_df[(org_df.cycle == cycle) & (org_df.direction == 'up')].potential
+            )
+    time_potential_axes[1].legend()
+    time_potential_canvas.draw()
+    interpolation_update_cycle(cycle_val.get())
+
+cycle_slider = tk.Scale(input_data_tab, variable=cycle_val, orient=tk.HORIZONTAL, from_=1, to=5, label='Cycle', command=interpolation_update_cycle)
+
+# interpolation_update_cycle(cycle_slider.get())
+cycle_slider.grid(column=1, row=3)
+
+speed_opt = ttk.OptionMenu(input_data_tab, speed_val, speed_list[0], *speed_list, command=update_speed)
+speed_opt.grid(column=0, row=0, columnspan=2)
+
 update_speed(speed_val.get())
 # ###########################
 
-# ### INTERPOLATION PLOT ###
-interpolation_fig, interpolation_ax = plt.subplots()
-interpolation_ax.set_xlabel(r'potential in $V$')
-interpolation_ax.set_ylabel(r'current in $mA$')
-interpolation_ax.plot([1, 2, 3], [1, 2, 3], color='blue', linewidth=2.0, label='interpolated 1 mv/s')
-interpolation_ax.plot([1, 2, 3], [1, 2, 3], color='red', linewidth=1.0, label='original 1 mv/s')
-interpolation_ax.legend()
 
-interpolation_canvas = FigureCanvasTkAgg(interpolation_fig, master=input_data_tab)
-interpolation_canvas.draw()
-interpolation_canvas.get_tk_widget().grid(column=1, row=1, sticky='NEWS')
-
-interpolation_toolbar = NavigationToolbar2Tk(interpolation_canvas, input_data_tab, pack_toolbar=False)
-interpolation_toolbar.update()
-interpolation_toolbar.grid(column=1, row=2)
-
-def interpolation_update_cycle(cycle_number):
-    print(cycle_number)
-
-cycle_slider = tk.Scale(input_data_tab, orient=tk.HORIZONTAL, from_=1, to=5, label='Cycle', command=interpolation_update_cycle)
-
-cycle_slider.grid(column=1, row=3)
-
-# ###########################
 
 #
 # ##################### FC Analysis Tab ########################
@@ -238,14 +247,9 @@ def subplot(row_index):
 # subplotentry.pack()
 #
 # tk.Button(regression_data_tab, text='Plot', command=subplot).pack()
-#
+
 root.mainloop()
 
-# sys.exit(0)
-
-# for speed in sorted(mainData):
-#     xList.append(math.sqrt(speed))
-#     yList.append(mainData[speed]['loops'][4]['current'][1700]/math.sqrt(speed))
 
 
 
