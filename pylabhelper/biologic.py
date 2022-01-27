@@ -1,12 +1,12 @@
-import os
+# debugging helpers
 import sys
 
 import numpy as np
 import pandas as pd
-
 import pylabhelper.math as lm
 import re
-from scipy import interpolate
+from sklearn.linear_model import LinearRegression
+from progress.bar import Bar
 
 
 def read_mpt(path):
@@ -89,10 +89,34 @@ def extract_cycle_keys(file_data):
     return [max_keys, min_keys]
 
 
-def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution):
+def reset_cycles(measured_data: pd.DataFrame):
+    max_keys, min_keys = extract_cycle_keys(measured_data)
+
+    if max_keys[0] < min_keys[0]:
+        # First extreme is upper vertex
+        # --> Cycle is upper - lower - upper
+        measured_data.loc[0 : max_keys[0], 'cycle'] = 'start'
+        measured_data.loc[0 : max_keys[0], 'direction'] = 'up'
+        for max_key_index in range(len(max_keys)-1):
+            measured_data.loc[max_keys[max_key_index]: max_keys[max_key_index + 1], 'cycle'] = max_key_index+1
+            measured_data.loc[max_keys[max_key_index]: min_keys[max_key_index], 'direction'] = 'down'
+            measured_data.loc[min_keys[max_key_index]: max_keys[max_key_index + 1], 'direction'] = 'up'
+
+        measured_data.loc[max_keys[-1]:, 'cycle'] = 'end'
+        measured_data.loc[max_keys[-1]:min_keys[-1], 'direction'] = 'down'
+        measured_data.loc[min_keys[-1]:, 'direction'] = 'up'
+    else:
+        # First extreme is lower vertex
+        # --> Cycle is lower - upper - lower
+        raise Exception('direction yet unimplemented')
+
+    return measured_data
+
+
+def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution,
+                       interpolation_method='interp1d'):
     # Prepare the cycles list for return
     cycles_df = []
-    cycles_original = []
 
     max_keys, min_keys = cycle_keys
 
@@ -112,16 +136,12 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
             up = file_data[min_keys[max_key_index]: max_keys[max_key_index + 1] + 1]
             up = up.drop_duplicates(subset='potential', keep='last')
 
-            original = {
-                'potential': np.concatenate([down.potential, up.potential]),
-                'current': np.concatenate([down.current, up.current]),
-                'cycle': max_key_index+1
-            }
-
             down = down.sort_values(by=['potential'])
             up = up.sort_values(by=['potential'])
-            interp_current_down = lm.interpolate(down.potential, down.current, interp_potential_down, method='interp1d')
-            interp_current_up = lm.interpolate(up.potential, up.current, interp_potential_up, method='interp1d')
+            interp_current_down = lm.interpolate(down.potential, down.current, interp_potential_down,
+                                                 method=interpolation_method)
+            interp_current_up = lm.interpolate(up.potential, up.current, interp_potential_up,
+                                               method=interpolation_method)
 
             # Stitch Interpolated Data together
             cycle = {
@@ -132,7 +152,6 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
 
             # Append to the cycles list
             cycles_df.append(pd.DataFrame(cycle))
-            cycles_original.append(pd.DataFrame(original))
     else:
         # First extreme is lower vertex
         # --> Cycle is lower - upper - lower
@@ -141,28 +160,36 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
     return {
         'path': measured_data['path'],
         'speed': measured_data['speed'],
-        'data': pd.concat(cycles_df),
-        'original': pd.concat(cycles_original)
+        'data': pd.concat(cycles_df)
     }
 
 
-def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
+def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution):
+    # prepare the loading bar
+    bar = Bar('Processing', max=len(path_list))
 
     # prepare data object
     series_data = []
     original_data = []
+
 
     for path in path_list:
         # read the files data into an object
         measured_data = read_mpt(path)
         cycle_keys = extract_cycle_keys(measured_data['file_data'])
         measurement = interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution)
-
-        original_data.append(measurement['original'])
+        original = {
+            'path': measured_data['path'],
+            'speed': measured_data['speed'],
+            'data': reset_cycles(measured_data['file_data'])
+        }
 
         speed = measurement['speed']
         series_data.append(measurement)
+        original_data.append(original)
         bar.next()
+
+    bar.finish()
 
     print("finished reading {file_count} files".format(file_count=len(path_list)))
 
@@ -170,15 +197,48 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution, bar):
 
     print("sorted list by measurement speed")
 
-    speed_series = {
+    interp_series = {
         'cycle': series_data[0]['data'].cycle.values,
         'potential': series_data[0]['data'].potential.values,
     }
 
     for file_data in series_data:
         cycle = file_data['data']
-        speed_series[file_data['speed']] = cycle.current.values
+        interp_series[file_data['speed']] = cycle.current.values
 
     print("finished converting to pandas data frame")
 
-    return pd.DataFrame(speed_series), original_data
+    return pd.DataFrame(interp_series), original_data
+
+
+def fc_analysis(data, cycle_number):
+    x = np.sqrt(list(data.columns.values[2:])).reshape((-1, 1))
+    cycle = data[data.cycle == cycle_number]
+
+    fc_data = {
+        'index': [],
+        'potential': [],
+        'faradayic': [],
+        'capacitive': [],
+        'rSq': []
+    }
+
+    speeds = data.columns.values[2:]
+    cutoff = 3
+
+    for index, row in cycle.iterrows():
+        y = []
+        for speed in speeds:
+            y.append(row[speed] / np.sqrt(speed))
+        model = LinearRegression().fit(x[:cutoff], y[:cutoff])
+        rSq = model.score(x[:cutoff], y[:cutoff])
+        faradayic = model.intercept_
+        capacitive = model.coef_[0]
+
+        fc_data['index'].append(index)
+        fc_data['potential'].append(row['potential'])
+        fc_data['faradayic'].append(faradayic)
+        fc_data['capacitive'].append(capacitive)
+        fc_data['rSq'].append(rSq)
+
+    return pd.DataFrame(fc_data)

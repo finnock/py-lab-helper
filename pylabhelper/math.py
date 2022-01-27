@@ -1,5 +1,6 @@
 from scipy import interpolate as interp
 
+
 def to_float(s):
     return float(s.replace(',', '.'))
 
