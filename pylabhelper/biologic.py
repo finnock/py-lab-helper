@@ -2,6 +2,7 @@
 import sys
 
 import numpy as np
+import pandas
 import pandas as pd
 import pylabhelper.math as lm
 import re
@@ -9,108 +10,71 @@ from sklearn.linear_model import LinearRegression
 from progress.bar import Bar
 
 
-def read_mpt(path):
+def read_mpt(path,
+                 columns: object = {
+                     'time/s': 'time',
+                     'Ewe/V': 'potential',
+                     '<I>/mA': 'current',
+                     'cycle number': 'cycle'
+                 }):
     """Read a biologic mpt file into a pandas dataframe, extracting the cycles as they are described in the data."""
     file_contents = open(path).readlines()
+
+    # check if ASCII file
+    if not "EC-Lab ASCII FILE" in file_contents[0]:
+        raise Exception('Only EC-Lab ASCII Files supported')
+
+    # check if CV file
+    if not "Cyclic Voltammetry" in file_contents[3]:
+        raise Exception('File ist not a cyclic voltammetry file')
+
+    # extract number of header lines from file
     header_lines = int(re.findall('Nb header lines : ([0-9]+)', file_contents[1])[0])
 
+    # slice header off file
     header = file_contents[:(header_lines-1)]
 
+    # extract measurement speed
     matching = [s for s in header if "dE/dt" in s]
-    meas_speed = lm.to_float(matching[0][5:-3])
+    speed = lm.to_float(matching[0][5:-3])
 
-    # Default file type
-    file_type = 'LSV'
+    # extract vertice potentials
+    matching = [s for s in header if "E1 (V)" in s]
+    first_vertice = lm.to_float(re.findall('([0-9]+[,\.][0-9]+)', matching[0])[0])
 
-    # Find the keys for the interesting numbers
-    for key, header in enumerate(file_contents[header_lines - 1].split('\t')):
-        if header == 'Ewe/V':
-            potential_key = key
-        if header == '<I>/mA':
-            current_key = key
-        if header == 'cycle number':
-            cycle_key = key
-            # Seems to be CV...
-            file_type = 'CV'
-        if header == 'Analog OUT/V':
-            rpm_key = key
-        if header == 'time/s':
-            time_key = key
+    matching = [s for s in header if "E2 (V)" in s]
+    second_vertice = lm.to_float(re.findall('([0-9]+[,\.][0-9]+)', matching[0])[0])
 
-    # Go through file, line by line starting after Header
-    if file_type == 'CV':
-        loop_key = cycle_key
+    # slice ec data off file
+    cv_data = list(map(lambda el: el.split('\t'), file_contents[header_lines:]))
+    cv_df = pandas.DataFrame(cv_data)
+    cv_df.columns = file_contents[header_lines-1].split('\t')[:-1]
 
-    if file_type == 'LSV':
-        loop_key = rpm_key
+    # Select only desired columns
+    cv_df = cv_df[columns.keys()]
+    cv_df = cv_df.rename(columns=columns)
 
-    # prepare data structure for dataframe
-    raw_data = {
-        'potential': [],
-        'current': [],
-        'cycle': [], 
-        'time': [],
-    }
-
-    for line in file_contents[header_lines:]:
-        # Split the line at tabs
-        line = line.split('\t')
-
-        # extract the values from each line
-        potential = lm.to_float(line[potential_key])
-        current = lm.to_float(line[current_key])
-        time = lm.to_float(line[time_key])
-        cycle_number = round(lm.to_float(line[loop_key]))
-
-        # save the values to the raw data structure for later
-        raw_data['potential'].append(potential)
-        raw_data['current'].append(current)
-        raw_data['cycle'].append(cycle_number)
-        raw_data['time'].append(time)
-
-    raw_df = pd.DataFrame(raw_data)
+    # convert columns to float and int
+    # todo: put desired type in columns object as parameter...
+    cv_df['potential'] = cv_df['potential'].apply(lambda x: lm.to_float(x))
+    cv_df['time'] = cv_df['time'].apply(lambda x: lm.to_float(x))
+    cv_df['current'] = cv_df['current'].apply(lambda x: lm.to_float(x))
+    cv_df['cycle'] = cv_df['cycle'].apply(lambda x: int(lm.to_float(x)))
 
     return {
-        'file_data': raw_df,
-        'speed': meas_speed,
-        'path': path
+        'speed': speed,
+        'first_vertice': first_vertice,
+        'second_vertice': second_vertice,
+        'path': path,
+        'open_circuit_potential': cv_df['potential'][0],
+        'data': cv_df
     }
 
 
-def extract_cycle_keys(file_data):
-
-    # Extract Maxima and Minima from each cycle
-    max_keys = []
-    min_keys = []
-    for cycle_number in file_data.cycle.unique():
-        max_keys.append(file_data[file_data.cycle == cycle_number].potential.idxmax())
-        min_keys.append(file_data[file_data.cycle == cycle_number].potential.idxmin())
-
-    return [max_keys, min_keys]
 
 
-def reset_cycles(measured_data: pd.DataFrame):
-    max_keys, min_keys = extract_cycle_keys(measured_data)
 
-    if max_keys[0] < min_keys[0]:
-        # First extreme is upper vertex
-        # --> Cycle is upper - lower - upper
-        measured_data.loc[0 : max_keys[0], 'cycle'] = 'start'
-        measured_data.loc[0 : max_keys[0], 'direction'] = 'up'
-        for max_key_index in range(len(max_keys)-1):
-            measured_data.loc[max_keys[max_key_index]: max_keys[max_key_index + 1], 'cycle'] = max_key_index+1
-            measured_data.loc[max_keys[max_key_index]: min_keys[max_key_index], 'direction'] = 'down'
-            measured_data.loc[min_keys[max_key_index]: max_keys[max_key_index + 1], 'direction'] = 'up'
 
-        measured_data.loc[max_keys[-1]:, 'cycle'] = 'end'
-        measured_data.loc[max_keys[-1]:min_keys[-1], 'direction'] = 'down'
-        measured_data.loc[min_keys[-1]:, 'direction'] = 'up'
-    else:
-        # First extreme is lower vertex
-        # --> Cycle is lower - upper - lower
-        raise Exception('direction yet unimplemented')
-
-    return measured_data
 
 
 def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution,
@@ -120,7 +84,7 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
 
     max_keys, min_keys = cycle_keys
 
-    file_data = measured_data['file_data']
+    file_data = measured_data['data']
 
     interp_potential_down = np.linspace(upper_vertice, lower_vertice, round((upper_vertice-lower_vertice)/resolution)+1)
     interp_potential_up = np.flipud(interp_potential_down)
@@ -155,6 +119,9 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
     else:
         # First extreme is lower vertex
         # --> Cycle is lower - upper - lower
+        print(max_keys)
+        print(min_keys)
+
         raise Exception('direction yet unimplemented')
 
     return {
@@ -164,7 +131,7 @@ def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, 
     }
 
 
-def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution):
+def read_mpt_series(path_list, resolution):
     # prepare the loading bar
     bar = Bar('Processing', max=len(path_list))
 
@@ -172,16 +139,20 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution):
     series_data = []
     original_data = []
 
-
     for path in path_list:
         # read the files data into an object
-        measured_data = read_mpt(path)
-        cycle_keys = extract_cycle_keys(measured_data['file_data'])
-        measurement = interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution)
+        file_data = read_mpt(path)
+        cycle_keys = extract_cycle_keys(file_data)
+        measurement = interpolate_cycles(file_data,
+                                         cycle_keys,
+                                         file_data['first_vertice'],
+                                         file_data['second_vertice'],
+                                         resolution)
+
         original = {
-            'path': measured_data['path'],
-            'speed': measured_data['speed'],
-            'data': reset_cycles(measured_data['file_data'])
+            'path': file_data['path'],
+            'speed': file_data['speed'],
+            'data': reset_cycles(file_data)
         }
 
         speed = measurement['speed']
@@ -207,11 +178,13 @@ def read_mpt_series(path_list, upper_vertice, lower_vertice, resolution):
         interp_series[file_data['speed']] = cycle.current.values
 
     print("finished converting to pandas data frame")
+    interp_series_df = pd.DataFrame.from_dict(interp_series, orient='index').transpose()
 
-    return pd.DataFrame(interp_series), original_data
+    return interp_series_df, original_data
+    #return interp_series, original_data
 
 
-def fc_analysis(data, cycle_number):
+def fc_analysis(data, cycle_number, cutoff=-1):
     x = np.sqrt(list(data.columns.values[2:])).reshape((-1, 1))
     cycle = data[data.cycle == cycle_number]
 
@@ -224,7 +197,6 @@ def fc_analysis(data, cycle_number):
     }
 
     speeds = data.columns.values[2:]
-    cutoff = 3
 
     for index, row in cycle.iterrows():
         y = []

@@ -14,9 +14,8 @@ from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk)
 from sklearn.linear_model import LinearRegression
 
-
 # Suppress the TK window, since only the dialog is intended
-#tk.Tk().withdraw()
+# tk.Tk().withdraw()
 
 
 # x = fc_data['potential']
@@ -53,18 +52,26 @@ pathList = askopenfilenames(filetypes=[("BioLogic .mpt", "*.mpt")])  # Full path
 
 # Read all files as an interpolated series indexed by the measurement speed. Vertices and resolution are used for the
 # interpolation. Optional: set interpolation_method using argument (list found in pylabhelper.math.py)
-interpolated_data, original_data = biologic.read_mpt_series(pathList,
-                                                            upper_vertice=3.0,
-                                                            lower_vertice=0.02,
-                                                            resolution=0.001)
+interpolated_data, original_data = biologic.read_mpt_series(pathList, resolution=0.001)
 
-fc_data = biologic.fc_analysis(interpolated_data, 4)
+# print(interpolated_data)
+
+# sys.exit()
+
+fc_data = biologic.fc_analysis(interpolated_data, 3, cutoff=3)
 
 print('fc analysis done')
 
-
 # ##################### Input Data Tab ########################
 #
+
+# region Test Region
+
+test = 123
+
+# endregion
+
+# region Input Data Tab
 
 input_data_tab.columnconfigure(0, weight=1)
 input_data_tab.columnconfigure(1, weight=1)
@@ -95,6 +102,7 @@ interpolation_toolbar = NavigationToolbar2Tk(interpolation_canvas, input_data_ta
 interpolation_toolbar.update()
 interpolation_toolbar.grid(column=1, row=2)
 
+
 def interpolation_update_cycle(cycle_number):
     org_df = next(item for item in original_data if item['speed'] == float(speed_val.get()))['data']
     org_pot = org_df[org_df.cycle == int(cycle_number)].potential
@@ -109,10 +117,11 @@ def interpolation_update_cycle(cycle_number):
     interpolation_ax.legend()
     interpolation_canvas.draw()
 
+
 # ### TIME POTENTIAL PLOT ###
 
 time_potential_fig, time_potential_axes = plt.subplots(2, 1)
-colors_tab_20 = plt.cm.tab20(np.linspace(0,1,20))
+colors_tab_20 = plt.cm.tab20(np.linspace(0, 1, 20))
 
 time_potential_axes[0].set_xlabel(r'time in s')
 time_potential_axes[0].set_ylabel(r'potential in $V$')
@@ -158,7 +167,9 @@ def update_speed(speed):
     time_potential_canvas.draw()
     interpolation_update_cycle(cycle_val.get())
 
-cycle_slider = tk.Scale(input_data_tab, variable=cycle_val, orient=tk.HORIZONTAL, from_=1, to=5, label='Cycle', command=interpolation_update_cycle)
+
+cycle_slider = tk.Scale(input_data_tab, variable=cycle_val, orient=tk.HORIZONTAL, from_=1, to=5, label='Cycle',
+                        command=interpolation_update_cycle)
 
 # interpolation_update_cycle(cycle_slider.get())
 cycle_slider.grid(column=1, row=3)
@@ -167,8 +178,7 @@ speed_opt = ttk.OptionMenu(input_data_tab, speed_val, speed_list[0], *speed_list
 speed_opt.grid(column=0, row=0, columnspan=2)
 
 update_speed(speed_val.get())
-# ###########################
-
+# endregion
 
 
 #
@@ -181,13 +191,16 @@ fc_analysis_tab.rowconfigure(0, weight=1)
 x = fc_data['potential']
 y = np.divide(list(fc_data.faradayic.values), list(fc_data.capacitive.values))
 
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(2, 1, gridspec_kw={'height_ratios': [1, 3]}, sharex=True)
+ax_rsq = ax[0]
+ax_fc = ax[1]
 plt.xlabel(r'potential in $V$')
 plt.ylabel(r'a.u.')
-ax.plot(x, fc_data.faradayic, color='red', linewidth=2.0, label="faradayic")
-ax.plot(x, fc_data.capacitive, color='blue', linewidth=2.0, label="capacitive")
-ax.plot(x, fc_data.rSq, color='green', linewidth=2.0, label=r'$R^2$')
-ax.legend()
+ax_fc.plot(x, fc_data.faradayic, color='red', linewidth=2.0, label="faradayic")
+ax_fc.plot(x, fc_data.capacitive, color='blue', linewidth=2.0, label="capacitive")
+ax_rsq.plot(x, fc_data.rSq, color='green', linewidth=2.0, label=r'$R^2$')
+ax_fc.legend()
+ax_rsq.legend()
 
 canvas = FigureCanvasTkAgg(fig, master=fc_analysis_tab)
 canvas.draw()
@@ -201,12 +214,11 @@ toolbar.grid(column=0, row=1)
 # regression tab
 
 
-
-def subplot(row_index):
-    #row_index = int(subplotentry.get())
+def subplot(row_index, cycle_number=1):
+    # row_index = int(subplotentry.get())
     data = interpolated_data
     speeds = list(data.columns.values[2:])
-    cycle = data[data.cycle == 4]
+    cycle = data[data.cycle == cycle_number]
     x = np.sqrt(list(data.columns.values[2:])).reshape((-1, 1))
 
     spfig, ax = plt.subplots()
@@ -214,21 +226,18 @@ def subplot(row_index):
     plt.ylabel(r'$I/\sqrt{v}$')
 
     y = []
+    first_index = cycle.index.to_list()[0]
+    last_index = cycle.index.to_list()[-1]
+    print(f'First: {first_index}, Last: {last_index}')
     row = cycle.loc[row_index]
     for speed in speeds:
         y.append(row[speed] / np.sqrt(speed))
 
     ax.plot(x, y, linewidth=2.0, marker="x", label="Potential: {potential} V".format(potential=row['potential']))
 
-    upper = 3
-
-    model = LinearRegression().fit(x[:upper], y[:upper])
-    rSq = model.score(x[:upper], y[:upper])
-    faradayic = model.intercept_
-    capacitive = model.coef_[0]
-
-    print('R²:', rSq)
-    ax.axline((0, faradayic), color='green', slope=capacitive, label='Linear Fit R²: {rsq:.2f}'.format(rsq=rSq))
+    fc_row = fc_data.loc[row_index]
+    ax.axline((0, fc_row['faradayic']), color='green', slope=fc_row['capacitive'],
+              label=f"Linear Fit R²: {fc_row['rSq']:.2f}")
 
     ax.legend()
     plt.show()
@@ -249,7 +258,3 @@ def subplot(row_index):
 # tk.Button(regression_data_tab, text='Plot', command=subplot).pack()
 
 root.mainloop()
-
-
-
-
