@@ -8,6 +8,7 @@ import pylabhelper.math as lm
 import re
 from sklearn.linear_model import LinearRegression
 from progress.bar import Bar
+import os
 
 
 def read_mpt(path,
@@ -39,11 +40,17 @@ def read_mpt(path,
     speed = lm.to_float(matching[0][5:-3])
 
     # extract vertice potentials
+    matching = [s for s in header if "Ei (V)" in s]
+    start_vertice = lm.to_float(re.findall('([\-0-9]+[,\.][0-9]+)', matching[0])[0])
+
     matching = [s for s in header if "E1 (V)" in s]
-    first_vertice = lm.to_float(re.findall('([0-9]+[,\.][0-9]+)', matching[0])[0])
+    first_vertice = lm.to_float(re.findall('([\-0-9]+[,\.][0-9]+)', matching[0])[0])
 
     matching = [s for s in header if "E2 (V)" in s]
-    second_vertice = lm.to_float(re.findall('([0-9]+[,\.][0-9]+)', matching[0])[0])
+    second_vertice = lm.to_float(re.findall('([\-0-9]+[,\.][0-9]+)', matching[0])[0])
+
+    matching = [s for s in header if "Ef (V)" in s]
+    final_vertice = lm.to_float(re.findall('([\-0-9]+[,\.][0-9]+)', matching[0])[0])
 
     # slice ec data off file
     cv_data = list(map(lambda el: el.split('\t'), file_contents[header_lines:]))
@@ -63,18 +70,14 @@ def read_mpt(path,
 
     return {
         'speed': speed,
+        'start_vertice': start_vertice,
         'first_vertice': first_vertice,
         'second_vertice': second_vertice,
+        'final_vertice': final_vertice,
         'path': path,
         'open_circuit_potential': cv_df['potential'][0],
         'data': cv_df
     }
-
-
-
-
-
-
 
 
 def interpolate_cycles(measured_data, cycle_keys, upper_vertice, lower_vertice, resolution,
